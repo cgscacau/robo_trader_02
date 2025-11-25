@@ -12,7 +12,7 @@ import os
 # Adiciona o diretório src ao path para imports
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-from src.ui.main_dashboard import dashboard
+from src.ui.main_dashboard import TradingDashboard
 from src.utils.logger import trading_logger
 
 def main():
