@@ -2,7 +2,6 @@
 =============================================================================
 PROFESSIONAL TRADING BOT - ARQUIVO PRINCIPAL CORRIGIDO
 =============================================================================
-Sistema completo de trading com interface Streamlit
 """
 
 import sys
@@ -14,30 +13,29 @@ root_dir = Path(__file__).parent
 sys.path.insert(0, str(root_dir))
 
 try:
-    # Importações principais
     import streamlit as st
-    import pandas as pd
-    import numpy as np
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
-    import plotly.express as px
-    from datetime import datetime, timedelta
-    from typing import Optional, Dict, Any, List
-    import time
-    import json
-    import requests
-    
-    # Importações dos módulos do projeto
-    from config.settings import TradingConfig
-    from api.binance_client import binance_client
-    from utils.logger import trading_logger
-    
-    # Importa o dashboard
-    from ui.main_dashboard import TradingDashboard
+    from ui.main_dashboard import TradingDashboard  # Import corrigido
     
 except ImportError as e:
     st.error(f"❌ Erro de importação: {str(e)}")
     st.stop()
+
+def main():
+    """Função principal da aplicação"""
+    try:
+        print("=== INICIANDO PROFESSIONAL TRADING BOT ===")
+        
+        # Cria e executa o dashboard
+        dashboard = TradingDashboard()
+        dashboard.run()
+        
+    except Exception as e:
+        st.error(f"❌ Erro crítico: {str(e)}")
+        st.exception(e)
+
+if __name__ == "__main__":
+    main()
+
 
 def main():
     """
