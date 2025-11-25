@@ -1,22 +1,18 @@
 """
 =============================================================================
-MÓDULO DE CONFIGURAÇÕES GLOBAIS
+MÓDULO DE CONFIGURAÇÕES GLOBAIS - VERSÃO CLOUD
 =============================================================================
 Este módulo centraliza todas as configurações do sistema de trading,
-incluindo parâmetros da API, timeframes, e configurações de segurança.
+otimizado para uso em Streamlit Cloud com segurança aprimorada.
 """
 
 import os
 from typing import Dict, List, Any
-from dotenv import load_dotenv
-
-# Carrega variáveis de ambiente do arquivo .env
-load_dotenv()
 
 class TradingConfig:
     """
     Classe principal de configurações do sistema de trading.
-    Centraliza todos os parâmetros configuráveis da aplicação.
+    Otimizada para ambiente cloud sem armazenamento de credenciais.
     """
     
     # ==========================================================================
@@ -31,12 +27,41 @@ class TradingConfig:
         'futures_testnet': 'https://testnet.binancefuture.com'
     }
     
-    # WebSocket URLs
+    # WebSocket URLs - Incluindo streams públicos
     BINANCE_WS_URLS = {
-        'mainnet': 'wss://stream.binance.com:9443/ws/',
-        'testnet': 'wss://testnet.binance.vision/ws/',
-        'futures_mainnet': 'wss://fstream.binance.com/ws/',
-        'futures_testnet': 'wss://stream.binancefuture.com/ws/'
+        'public_mainnet': 'wss://stream.binance.com:9443/ws/',
+        'public_testnet': 'wss://testnet.binance.vision/ws/',
+        'private_mainnet': 'wss://stream.binance.com:9443/ws/',
+        'private_testnet': 'wss://testnet.binance.vision/ws/',
+        'futures_public': 'wss://fstream.binance.com/ws/',
+        'futures_private': 'wss://fstream.binance.com/ws/'
+    }
+    
+    # ==========================================================================
+    # MODOS DE OPERAÇÃO
+    # ==========================================================================
+    
+    OPERATION_MODES = {
+        'demo': {
+            'name': 'Modo Demonstração',
+            'description': 'Dados públicos via WebSocket, sem autenticação',
+            'requires_api': False,
+            'features': ['charts', 'indicators', 'backtesting', 'optimization']
+        },
+        'paper_trading': {
+            'name': 'Paper Trading',
+            'description': 'Simulação com dados reais, sem ordens reais',
+            'requires_api': True,
+            'environment': 'testnet',
+            'features': ['charts', 'indicators', 'backtesting', 'simulation']
+        },
+        'live_trading': {
+            'name': 'Trading Real',
+            'description': 'Operações reais com dinheiro real',
+            'requires_api': True,
+            'environment': 'mainnet',
+            'features': ['charts', 'indicators', 'backtesting', 'real_orders']
+        }
     }
     
     # ==========================================================================
@@ -60,6 +85,13 @@ class TradingConfig:
     # Intervalo de atualização dos dados em tempo real (segundos)
     REALTIME_UPDATE_INTERVAL = 1
     
+    # Símbolos disponíveis para modo demo (WebSocket público)
+    PUBLIC_SYMBOLS = [
+        'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'XRPUSDT',
+        'SOLUSDT', 'DOTUSDT', 'LINKUSDT', 'AVAXUSDT', 'LTCUSDT',
+        'BCHUSDT', 'XLMUSDT', 'VETUSDT', 'FILUSDT', 'TRXUSDT'
+    ]
+    
     # ==========================================================================
     # CONFIGURAÇÕES DE SEGURANÇA
     # ==========================================================================
@@ -72,6 +104,9 @@ class TradingConfig:
     
     # Intervalo entre tentativas de reconexão (segundos)
     RECONNECTION_INTERVAL = 5
+    
+    # Tempo limite para manter credenciais em memória (minutos)
+    CREDENTIALS_TIMEOUT = 60
     
     # ==========================================================================
     # CONFIGURAÇÕES DA INTERFACE
@@ -91,18 +126,15 @@ class TradingConfig:
         'bearish': '#ff4444',
         'neutral': '#ffaa00',
         'background': '#0e1117',
-        'grid': '#262730'
+        'grid': '#262730',
+        'demo_mode': '#ffa500',
+        'paper_mode': '#00bfff',
+        'live_mode': '#ff4444'
     }
     
     # ==========================================================================
     # CONFIGURAÇÕES DE TRADING
     # ==========================================================================
-    
-    # Pares de moedas padrão para monitoramento
-    DEFAULT_SYMBOLS = [
-        'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 
-        'XRPUSDT', 'SOLUSDT', 'DOTUSDT', 'LINKUSDT'
-    ]
     
     # Configurações de gestão de risco padrão
     DEFAULT_RISK_SETTINGS = {
@@ -113,31 +145,89 @@ class TradingConfig:
         'default_take_profit_percent': 4.0 # % padrão para take profit
     }
     
+    # ==========================================================================
+    # CONFIGURAÇÕES ESPECÍFICAS PARA WEBSOCKET PÚBLICO
+    # ==========================================================================
+    
+    # Streams WebSocket públicos disponíveis
+    PUBLIC_WEBSOCKET_STREAMS = {
+        'ticker': '@ticker',           # Informações de preço 24h
+        'kline': '@kline_{}',         # Candlesticks por timeframe
+        'depth': '@depth20@100ms',    # Order book
+        'trades': '@trade',           # Trades individuais
+        'miniTicker': '@miniTicker'   # Mini ticker
+    }
+    
     @classmethod
-    def get_api_credentials(cls) -> Dict[str, str]:
+    def get_operation_mode_config(cls, mode: str) -> Dict[str, Any]:
         """
-        Recupera credenciais da API de variáveis de ambiente.
+        Obtém configuração específica do modo de operação.
         
+        Args:
+            mode: Modo de operação ('demo', 'paper_trading', 'live_trading')
+            
         Returns:
-            Dict contendo as credenciais da API
+            Configuração do modo selecionado
         """
+        return cls.OPERATION_MODES.get(mode, cls.OPERATION_MODES['demo'])
+    
+    @classmethod
+    def validate_credentials_format(cls, api_key: str, api_secret: str) -> Dict[str, Any]:
+        """
+        Valida formato das credenciais sem testá-las.
+        
+        Args:
+            api_key: Chave da API
+            api_secret: Segredo da API
+            
+        Returns:
+            Dicionário com resultado da validação
+        """
+        errors = []
+        
+        # Validação básica de formato
+        if not api_key or len(api_key.strip()) < 10:
+            errors.append("API Key deve ter pelo menos 10 caracteres")
+        
+        if not api_secret or len(api_secret.strip()) < 10:
+            errors.append("API Secret deve ter pelo menos 10 caracteres")
+        
+        # Validação de caracteres especiais suspeitos
+        if api_key and (' ' in api_key or '\n' in api_key or '\t' in api_key):
+            errors.append("API Key contém espaços ou caracteres inválidos")
+        
+        if api_secret and (' ' in api_secret or '\n' in api_secret or '\t' in api_secret):
+            errors.append("API Secret contém espaços ou caracteres inválidos")
+        
         return {
-            'api_key': os.getenv('BINANCE_API_KEY', ''),
-            'api_secret': os.getenv('BINANCE_API_SECRET', ''),
-            'testnet_api_key': os.getenv('BINANCE_TESTNET_API_KEY', ''),
-            'testnet_api_secret': os.getenv('BINANCE_TESTNET_API_SECRET', '')
+            'valid': len(errors) == 0,
+            'errors': errors,
+            'warnings': [] if len(errors) == 0 else ["Verifique suas credenciais cuidadosamente"]
         }
     
     @classmethod
-    def validate_credentials(cls, credentials: Dict[str, str]) -> bool:
+    def get_websocket_url(cls, mode: str, symbol: str, stream_type: str, 
+                         timeframe: str = None) -> str:
         """
-        Valida se as credenciais estão presentes e não vazias.
+        Gera URL do WebSocket baseada no modo e parâmetros.
         
         Args:
-            credentials: Dicionário com credenciais
+            mode: Modo de operação
+            symbol: Símbolo da moeda
+            stream_type: Tipo de stream
+            timeframe: Timeframe (para kline)
             
         Returns:
-            True se credenciais válidas, False caso contrário
+            URL completa do WebSocket
         """
-        required_keys = ['api_key', 'api_secret']
-        return all(credentials.get(key, '').strip() != '' for key in required_keys)
+        base_url = cls.BINANCE_WS_URLS['public_mainnet']  # Sempre público para demo
+        
+        symbol_lower = symbol.lower()
+        
+        if stream_type == 'kline' and timeframe:
+            stream = f"{symbol_lower}@kline_{timeframe}"
+        else:
+            stream_template = cls.PUBLIC_WEBSOCKET_STREAMS.get(stream_type, '@ticker')
+            stream = f"{symbol_lower}{stream_template}"
+        
+        return f"{base_url}{stream}"
