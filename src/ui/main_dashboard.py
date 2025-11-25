@@ -1,814 +1,630 @@
 """
 =============================================================================
-DASHBOARD PRINCIPAL - VERSÃO CLOUD SEGURA CORRIGIDA
+PROFESSIONAL TRADING BOT - ARQUIVO PRINCIPAL
 =============================================================================
-Interface otimizada para Streamlit Cloud com inicialização correta
-do session state e tratamento de erros robusto.
+Sistema completo de trading com interface Streamlit
 """
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any
+import requests
+import json
 import time
+from datetime import datetime
+from typing import Dict, List, Optional, Any
 
-from ..config.settings import TradingConfig
-from ..api.binance_client import binance_client
-from ..utils.logger import trading_logger
+# =============================================================================
+# CONFIGURAÇÕES GLOBAIS
+# =============================================================================
 
-class TradingDashboard:
-    """
-    Dashboard principal otimizado para ambiente cloud.
-    Suporta modo demo e entrada segura de credenciais.
-    """
+class Config:
+    """Configurações centralizadas do sistema"""
+    
+    # Símbolos disponíveis
+    SYMBOLS = [
+        'BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'XRPUSDT',
+        'SOLUSDT', 'DOTUSDT', 'LINKUSDT', 'AVAXUSDT', 'LTCUSDT'
+    ]
+    
+    # Timeframes
+    TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d']
+    
+    # URLs da API
+    API_BASE = 'https://api.binance.com'
+    TESTNET_BASE = 'https://testnet.binance.vision'
+    
+    # Cores
+    COLORS = {
+        'green': '#00ff88',
+        'red': '#ff4444',
+        'orange': '#ffaa00'
+    }
+
+# =============================================================================
+# CLIENTE BINANCE SIMPLIFICADO
+# =============================================================================
+
+class BinanceClient:
+    """Cliente simplificado para Binance API"""
     
     def __init__(self):
-        """Inicializa o dashboard."""
-        self.setup_page_config()
-        # IMPORTANTE: Inicializa session_state ANTES de qualquer uso
-        self.initialize_session_state()
+        self.api_key = None
+        self.api_secret = None
+        self.is_testnet = True
+        self.is_authenticated = False
     
-    def setup_page_config(self):
-        """Configura a página do Streamlit."""
-        st.set_page_config(**TradingConfig.STREAMLIT_CONFIG)
-        
-        # CSS customizado aprimorado
-        st.markdown("""
-        <style>
-        .main-header {
-            font-size: 2.5rem;
-            font-weight: bold;
-            color: #00ff88;
-            text-align: center;
-            margin-bottom: 2rem;
-        }
-        .mode-demo {
-            background: linear-gradient(90deg, #ffa500, #ff8c00);
-            color: white;
-            padding: 0.7rem;
-            border-radius: 0.5rem;
-            text-align: center;
-            font-weight: bold;
-            margin-bottom: 1rem;
-        }
-        .mode-paper {
-            background: linear-gradient(90deg, #00bfff, #0080ff);
-            color: white;
-            padding: 0.7rem;
-            border-radius: 0.5rem;
-            text-align: center;
-            font-weight: bold;
-            margin-bottom: 1rem;
-        }
-        .mode-live {
-            background: linear-gradient(90deg, #ff4444, #cc0000);
-            color: white;
-            padding: 0.7rem;
-            border-radius: 0.5rem;
-            text-align: center;
-            font-weight: bold;
-            margin-bottom: 1rem;
-        }
-        .security-notice {
-            background-color: #2d5a2d;
-            border-left: 4px solid #00ff88;
-            padding: 1rem;
-            border-radius: 0.5rem;
-            margin: 1rem 0;
-        }
-        .warning-notice {
-            background-color: #5a4d2d;
-            border-left: 4px solid #ffaa00;
-            padding: 1rem;
-            border-radius: 0.5rem;
-            margin: 1rem 0;
-        }
-        .metric-card {
-            background-color: #262730;
-            padding: 1rem;
-            border-radius: 0.5rem;
-            border: 1px solid #404040;
-        }
-        .demo-features {
-            background-color: #1a1a2e;
-            padding: 1rem;
-            border-radius: 0.5rem;
-            border: 1px solid #ffa500;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-    
-    def initialize_session_state(self):
-        """
-        Inicializa TODAS as variáveis de estado da sessão.
-        DEVE ser chamado antes de qualquer acesso ao session_state.
-        """
-        # Inicialização com valores padrão seguros
-        session_defaults = {
-            'operation_mode': 'demo',
-            'selected_symbol': 'BTCUSDT',
-            'selected_timeframe': TradingConfig.DEFAULT_TIMEFRAME,
-            'account_balance': None,
-            'historical_data': None,
-            'last_auth_attempt': None,
-            'price_data': {},
-            'dashboard_initialized': False
-        }
-        
-        # Aplica valores padrão apenas se não existirem
-        for key, default_value in session_defaults.items():
-            if key not in st.session_state:
-                st.session_state[key] = default_value
-        
-        # Inicializa o cliente binance apenas uma vez
-        if not st.session_state.get('dashboard_initialized', False):
-            try:
-                binance_client.set_operation_mode(st.session_state.operation_mode)
-                st.session_state.dashboard_initialized = True
-                trading_logger.log_info("Dashboard inicializado com sucesso")
-            except Exception as e:
-                trading_logger.log_error(f"Erro na inicialização do dashboard: {str(e)}", e)
-                # Define modo seguro em caso de erro
-                st.session_state.operation_mode = 'demo'
-                st.session_state.dashboard_initialized = True
-    
-    def safe_get_session_state(self, key: str, default=None):
-        """
-        Obtém valor do session_state de forma segura.
-        
-        Args:
-            key: Chave do session_state
-            default: Valor padrão se não existir
-            
-        Returns:
-            Valor do session_state ou padrão
-        """
+    def authenticate(self, api_key: str, api_secret: str, testnet: bool = True) -> Dict:
+        """Autentica com a API"""
         try:
-            return getattr(st.session_state, key, default)
-        except AttributeError:
-            return default
+            import ccxt
+            
+            self.api_key = api_key
+            self.api_secret = api_secret
+            self.is_testnet = testnet
+            
+            # Configuração do exchange
+            config = {
+                'apiKey': api_key,
+                'secret': api_secret,
+                'timeout': 30000,
+                'enableRateLimit': True,
+            }
+            
+            if testnet:
+                config['sandbox'] = True
+                config['urls'] = {'api': Config.TESTNET_BASE}
+            
+            self.exchange = ccxt.binance(config)
+            
+            # Testa conexão
+            balance = self.exchange.fetch_balance()
+            self.is_authenticated = True
+            
+            return {
+                'success': True,
+                'message': f'Conectado ao {"Testnet" if testnet else "Mainnet"}',
+                'balance_count': len([k for k, v in balance.get('total', {}).items() if v > 0])
+            }
+            
+        except Exception as e:
+            self.is_authenticated = False
+            return {
+                'success': False,
+                'message': f'Erro na autenticação: {str(e)}'
+            }
     
-    def render_header(self):
-        """Renderiza o cabeçalho com indicador de modo."""
-        st.markdown('<h1 class="main-header">🚀 Professional Trading Bot</h1>', 
+    def get_balance(self) -> Optional[Dict]:
+        """Obtém saldo da conta"""
+        if not self.is_authenticated:
+            return None
+        
+        try:
+            balance = self.exchange.fetch_balance()
+            return balance
+        except Exception as e:
+            st.error(f"Erro ao obter saldo: {str(e)}")
+            return None
+    
+    def get_historical_data(self, symbol: str, timeframe: str, limit: int = 500) -> Optional[pd.DataFrame]:
+        """Obtém dados históricos"""
+        try:
+            if self.is_authenticated:
+                # Usa API autenticada
+                ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            else:
+                # Usa API pública
+                return self.get_public_data(symbol, timeframe, limit)
+            
+            if ohlcv:
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df.set_index('timestamp', inplace=True)
+                return df
+            
+            return None
+            
+        except Exception as e:
+            st.error(f"Erro ao obter dados: {str(e)}")
+            return self.get_public_data(symbol, timeframe, limit)
+    
+    def get_public_data(self, symbol: str, timeframe: str, limit: int = 500) -> Optional[pd.DataFrame]:
+        """Obtém dados via API pública"""
+        try:
+            url = f"{Config.API_BASE}/api/v3/klines"
+            params = {
+                'symbol': symbol,
+                'interval': timeframe,
+                'limit': min(limit, 1000)
+            }
+            
+            response = requests.get(url, params=params, timeout=30)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                df = pd.DataFrame(data, columns=[
+                    'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                    'close_time', 'quote_volume', 'trades', 'taker_buy_base', 'taker_buy_quote', 'ignore'
+                ])
+                
+                # Converte tipos
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                for col in ['open', 'high', 'low', 'close', 'volume']:
+                    df[col] = pd.to_numeric(df[col])
+                
+                df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+                df.set_index('timestamp', inplace=True)
+                
+                return df
+            
+            return None
+            
+        except Exception as e:
+            st.error(f"Erro na API pública: {str(e)}")
+            return None
+    
+    def get_current_price(self, symbol: str) -> Optional[Dict]:
+        """Obtém preço atual"""
+        try:
+            url = f"{Config.API_BASE}/api/v3/ticker/24hr"
+            params = {'symbol': symbol}
+            
+            response = requests.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                return {
+                    'price': float(data['lastPrice']),
+                    'change': float(data['priceChange']),
+                    'change_percent': float(data['priceChangePercent']),
+                    'high': float(data['highPrice']),
+                    'low': float(data['lowPrice']),
+                    'volume': float(data['volume'])
+                }
+            
+            return None
+            
+        except Exception as e:
+            st.error(f"Erro ao obter preço: {str(e)}")
+            return None
+
+# =============================================================================
+# INTERFACE PRINCIPAL
+# =============================================================================
+
+def setup_page():
+    """Configura a página"""
+    st.set_page_config(
+        page_title="Professional Trading Bot",
+        page_icon="📈",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
+    # CSS customizado
+    st.markdown("""
+    <style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #00ff88;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .mode-demo {
+        background: linear-gradient(90deg, #ffa500, #ff8c00);
+        color: white;
+        padding: 0.7rem;
+        border-radius: 0.5rem;
+        text-align: center;
+        font-weight: bold;
+        margin-bottom: 1rem;
+    }
+    .mode-auth {
+        background: linear-gradient(90deg, #00bfff, #0080ff);
+        color: white;
+        padding: 0.7rem;
+        border-radius: 0.5rem;
+        text-align: center;
+        font-weight: bold;
+        margin-bottom: 1rem;
+    }
+    .security-box {
+        background-color: #2d5a2d;
+        border-left: 4px solid #00ff88;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 1rem 0;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+def init_session_state():
+    """Inicializa estado da sessão"""
+    defaults = {
+        'mode': 'demo',
+        'symbol': 'BTCUSDT',
+        'timeframe': '1h',
+        'authenticated': False,
+        'balance_data': None,
+        'chart_data': None
+    }
+    
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+def render_header():
+    """Renderiza cabeçalho"""
+    st.markdown('<h1 class="main-header">🚀 Professional Trading Bot</h1>', 
+               unsafe_allow_html=True)
+    
+    # Indicador de modo
+    if st.session_state.mode == 'demo':
+        st.markdown('<div class="mode-demo">📊 MODO DEMO - Dados Públicos</div>', 
                    unsafe_allow_html=True)
-        
-        # Obtém modo de operação de forma segura
-        current_mode = self.safe_get_session_state('operation_mode', 'demo')
-        
-        try:
-            mode_config = TradingConfig.get_operation_mode_config(current_mode)
-            
-            # Indicador de modo atual
-            if current_mode == 'demo':
-                st.markdown(f'<div class="mode-demo">📊 {mode_config["name"].upper()} - Dados Públicos WebSocket</div>', 
-                           unsafe_allow_html=True)
-            elif current_mode == 'paper_trading':
-                st.markdown(f'<div class="mode-paper">🧪 {mode_config["name"].upper()} - Testnet</div>', 
-                           unsafe_allow_html=True)
-            elif current_mode == 'live_trading':
-                st.markdown(f'<div class="mode-live">⚡ {mode_config["name"].upper()} - Mainnet</div>', 
-                           unsafe_allow_html=True)
-        except Exception as e:
-            trading_logger.log_error(f"Erro ao renderizar header: {str(e)}", e)
-            st.markdown('<div class="mode-demo">📊 MODO DEMO - SEGURO</div>', 
-                       unsafe_allow_html=True)
+    else:
+        env = "TESTNET" if client.is_testnet else "MAINNET"
+        status = "CONECTADO" if client.is_authenticated else "DESCONECTADO"
+        st.markdown(f'<div class="mode-auth">🔐 {env} - {status}</div>', 
+                   unsafe_allow_html=True)
+
+def render_sidebar():
+    """Renderiza barra lateral"""
+    st.sidebar.markdown("## 🎯 Modo de Operação")
     
-    def render_mode_selection_sidebar(self):
-        """Renderiza seleção de modo na sidebar."""
-        st.sidebar.markdown("## 🎯 Modo de Operação")
-        
-        # Informações dos modos
-        st.sidebar.markdown("""
-        **📊 Demo**: Dados públicos, sem API
-        **🧪 Paper**: Simulação com Testnet  
-        **⚡ Live**: Trading real com Mainnet
-        """)
-        
-        current_mode = self.safe_get_session_state('operation_mode', 'demo')
-        mode_options = list(TradingConfig.OPERATION_MODES.keys())
-        mode_names = [TradingConfig.OPERATION_MODES[m]['name'] for m in mode_options]
-        
-        try:
-            current_index = mode_options.index(current_mode)
-        except ValueError:
-            current_index = 0  # Default para demo se modo inválido
-            st.session_state.operation_mode = 'demo'
-        
-        selected_mode_name = st.sidebar.selectbox(
-            "Selecione o modo:",
-            mode_names,
-            index=current_index
-        )
-        
-        selected_mode = mode_options[mode_names.index(selected_mode_name)]
-        
-        if selected_mode != current_mode:
-            try:
-                st.session_state.operation_mode = selected_mode
-                binance_client.set_operation_mode(selected_mode)
-                
-                # Limpa dados ao trocar modo
-                st.session_state.account_balance = None
-                st.session_state.historical_data = None
-                
-                st.rerun()
-            except Exception as e:
-                trading_logger.log_error(f"Erro ao trocar modo: {str(e)}", e)
-                st.sidebar.error("❌ Erro ao trocar modo")
+    # Seleção de modo
+    mode = st.sidebar.selectbox(
+        "Selecione o modo:",
+        ["demo", "testnet", "mainnet"],
+        index=["demo", "testnet", "mainnet"].index(st.session_state.mode),
+        format_func=lambda x: {
+            "demo": "📊 Demo (Público)",
+            "testnet": "🧪 Testnet",
+            "mainnet": "⚡ Mainnet"
+        }[x]
+    )
     
-    def render_authentication_sidebar(self):
-        """Renderiza painel de autenticação para modos que requerem API."""
-        current_mode = self.safe_get_session_state('operation_mode', 'demo')
+    if mode != st.session_state.mode:
+        st.session_state.mode = mode
+        st.session_state.authenticated = False
+        st.session_state.balance_data = None
+        st.rerun()
+    
+    # Autenticação para modos não-demo
+    if st.session_state.mode != 'demo':
+        st.sidebar.markdown("## 🔐 Autenticação")
         
-        try:
-            mode_config = TradingConfig.get_operation_mode_config(current_mode)
-        except Exception as e:
-            trading_logger.log_error(f"Erro ao obter config do modo: {str(e)}", e)
-            mode_config = {'requires_api': False}
-        
-        if not mode_config.get('requires_api', False):
-            # Modo demo - não precisa de autenticação
-            st.sidebar.markdown("## 🔓 Sem Autenticação")
-            st.sidebar.success("✅ Modo Demo Ativo")
-            st.sidebar.markdown("Usando dados públicos via WebSocket")
-            return
-        
-        st.sidebar.markdown("## 🔐 Autenticação API")
-        
-        if not binance_client.is_authenticated:
+        if not st.session_state.authenticated:
             with st.sidebar.form("auth_form"):
                 st.markdown("### Credenciais Binance")
                 
-                # Aviso de segurança
                 st.markdown("""
-                <div class="security-notice">
-                🔒 <strong>Segurança:</strong><br>
-                • Credenciais não são salvas<br>
-                • Apenas em memória temporária<br>
-                • Timeout automático em 60min
+                <div class="security-box">
+                🔒 <strong>Seguro:</strong><br>
+                • Não salvamos suas chaves<br>
+                • Apenas em memória<br>
+                • Limpeza automática
                 </div>
                 """, unsafe_allow_html=True)
                 
-                # Tipo de conta baseado no modo
-                if current_mode == 'paper_trading':
-                    st.info("🧪 **Testnet** - Ambiente de testes")
-                    account_type = st.selectbox("Tipo de Conta:", ["Spot", "Futures"])
-                else:
-                    st.warning("⚡ **Mainnet** - Ambiente REAL")
-                    account_type = st.selectbox("Tipo de Conta:", ["Spot", "Futures"])
+                api_key = st.text_input("API Key:", type="password")
+                api_secret = st.text_input("API Secret:", type="password")
                 
-                # Campos de API com validação visual
-                api_key = st.text_input(
-                    "API Key:",
-                    type="password",
-                    help="Sua chave de API da Binance (não será salva)",
-                    placeholder="Digite sua API Key aqui..."
-                )
+                submit = st.form_submit_button("🔑 Conectar", use_container_width=True)
                 
-                api_secret = st.text_input(
-                    "API Secret:",
-                    type="password",
-                    help="Seu segredo de API da Binance (não será salvo)",
-                    placeholder="Digite seu API Secret aqui..."
-                )
-                
-                # Validação em tempo real
-                if api_key or api_secret:
-                    try:
-                        validation = TradingConfig.validate_credentials_format(api_key, api_secret)
-                        if not validation['valid']:
-                            for error in validation['errors']:
-                                st.error(f"⚠️ {error}")
-                    except Exception as e:
-                        st.error(f"❌ Erro na validação: {str(e)}")
-                
-                # Botão de autenticação
-                submit_button = st.form_submit_button("🔑 Conectar API", use_container_width=True)
-                
-                if submit_button:
-                    if api_key and api_secret:
-                        try:
-                            validation = TradingConfig.validate_credentials_format(api_key, api_secret)
-                            
-                            if validation['valid']:
-                                is_testnet = current_mode == 'paper_trading'
-                                acc_type = account_type.lower()
-                                
-                                with st.spinner("🔄 Conectando com a Binance..."):
-                                    result = binance_client.authenticate(api_key, api_secret, is_testnet, acc_type)
-                                
-                                st.session_state.last_auth_attempt = result
-                                
-                                if result['success']:
-                                    st.success(f"✅ {result['message']}")
-                                    st.success(f"⏱️ Tempo de resposta: {result['response_time']:.2f}s")
-                                    time.sleep(1)
-                                    st.rerun()
-                                else:
-                                    st.error(f"❌ {result['message']}")
-                                    if result.get('suggestion'):
-                                        st.info(f"💡 {result['suggestion']}")
-                            else:
-                                st.error("⚠️ Corrija os erros de formato antes de conectar")
-                        except Exception as e:
-                            trading_logger.log_error(f"Erro na autenticação: {str(e)}", e)
-                            st.error(f"❌ Erro inesperado: {str(e)}")
+                if submit and api_key and api_secret:
+                    with st.spinner("Conectando..."):
+                        result = client.authenticate(
+                            api_key, api_secret, 
+                            st.session_state.mode == 'testnet'
+                        )
+                    
+                    if result['success']:
+                        st.session_state.authenticated = True
+                        st.success(result['message'])
+                        time.sleep(1)
+                        st.rerun()
                     else:
-                        st.error("⚠️ Preencha todos os campos!")
-        
+                        st.error(result['message'])
         else:
-            # Usuário autenticado
-            st.sidebar.success("✅ API Conectada!")
-            
-            # Informações da conexão
-            try:
-                if hasattr(binance_client, 'temp_credentials') and binance_client.temp_credentials:
-                    creds = binance_client.temp_credentials
-                    env = "TESTNET" if creds['testnet'] else "MAINNET"
-                    acc_type = creds['account_type'].upper()
-                    st.sidebar.info(f"🌐 {env} - {acc_type}")
-                
-                # Tempo restante
-                if hasattr(binance_client, 'credentials_timestamp') and binance_client.credentials_timestamp:
-                    elapsed = datetime.now() - binance_client.credentials_timestamp
-                    remaining = TradingConfig.CREDENTIALS_TIMEOUT - (elapsed.total_seconds() / 60)
-                    st.sidebar.info(f"⏱️ Expira em: {remaining:.0f} min")
-            except Exception as e:
-                trading_logger.log_error(f"Erro ao mostrar info de conexão: {str(e)}", e)
-            
-            # Botão de desconexão
+            st.sidebar.success("✅ Conectado!")
             if st.sidebar.button("🔓 Desconectar", use_container_width=True):
-                try:
-                    binance_client.disconnect()
-                    st.session_state.account_balance = None
-                    st.rerun()
-                except Exception as e:
-                    trading_logger.log_error(f"Erro ao desconectar: {str(e)}", e)
-                    st.sidebar.error("❌ Erro ao desconectar")
-        
-    def render_trading_controls_sidebar(self):
-        """Renderiza controles de trading com validação robusta."""
-        st.sidebar.markdown("## 📊 Controles de Trading")
-        
-        current_mode = self.safe_get_session_state('operation_mode', 'demo')
-        current_symbol = self.safe_get_session_state('selected_symbol', 'BTCUSDT')
-        current_timeframe = self.safe_get_session_state('selected_timeframe', TradingConfig.DEFAULT_TIMEFRAME)
-        
-        try:
-            # Símbolos disponíveis baseados no modo - USANDO O MÉTODO CORRETO
-            available_symbols = TradingConfig.get_available_symbols(current_mode)
-            
-            # Valida se o símbolo atual está disponível
-            if current_symbol not in available_symbols:
-                current_symbol = available_symbols[0]  # Usa o primeiro disponível
-                st.session_state.selected_symbol = current_symbol
-            
-            # Seleção de símbolo
-            try:
-                symbol_index = available_symbols.index(current_symbol)
-            except (ValueError, IndexError):
-                symbol_index = 0
-                st.session_state.selected_symbol = available_symbols[0]
-            
-            symbol = st.sidebar.selectbox(
-                "Símbolo:",
-                available_symbols,
-                index=symbol_index,
-                help=f"Símbolos disponíveis no modo {current_mode}"
-            )
-            
-            if symbol != current_symbol:
-                st.session_state.selected_symbol = symbol
-                st.session_state.historical_data = None
-            
-            # Seleção de timeframe
-            try:
-                timeframe_index = TradingConfig.AVAILABLE_TIMEFRAMES.index(current_timeframe)
-            except (ValueError, IndexError):
-                timeframe_index = TradingConfig.AVAILABLE_TIMEFRAMES.index(TradingConfig.DEFAULT_TIMEFRAME)
-                st.session_state.selected_timeframe = TradingConfig.DEFAULT_TIMEFRAME
-            
-            timeframe = st.sidebar.selectbox(
-                "Timeframe:",
-                TradingConfig.AVAILABLE_TIMEFRAMES,
-                index=timeframe_index,
-                help="Intervalo de tempo para os candles"
-            )
-            
-            if timeframe != current_timeframe:
-                st.session_state.selected_timeframe = timeframe
-                st.session_state.historical_data = None
-            
-            # Informações do modo atual
-            st.sidebar.markdown("---")
-            mode_config = TradingConfig.get_operation_mode_config(current_mode)
-            st.sidebar.info(f"📊 **Modo**: {mode_config['name']}")
-            st.sidebar.info(f"🎯 **Símbolos**: {len(available_symbols)} disponíveis")
-            
-            # Botão para atualizar dados
-            if st.sidebar.button("🔄 Atualizar Dados", use_container_width=True):
-                st.session_state.historical_data = None
-                st.session_state.account_balance = None
-                st.session_state.price_data = {}
-                st.success("🔄 Dados atualizados!")
+                st.session_state.authenticated = False
+                st.session_state.balance_data = None
+                client.is_authenticated = False
                 st.rerun()
-                
-        except Exception as e:
-            trading_logger.log_error(f"Erro nos controles de trading: {str(e)}", e)
-            st.sidebar.error("❌ Erro nos controles")
-            
-            # Valores de fallback seguros
-            st.session_state.selected_symbol = 'BTCUSDT'
-            st.session_state.selected_timeframe = '1h'
+    
+    # Controles de trading
+    st.sidebar.markdown("## 📊 Trading")
+    
+    # Símbolo
+    symbol = st.sidebar.selectbox(
+        "Símbolo:",
+        Config.SYMBOLS,
+        index=Config.SYMBOLS.index(st.session_state.symbol)
+    )
+    
+    if symbol != st.session_state.symbol:
+        st.session_state.symbol = symbol
+        st.session_state.chart_data = None
+    
+    # Timeframe
+    timeframe = st.sidebar.selectbox(
+        "Timeframe:",
+        Config.TIMEFRAMES,
+        index=Config.TIMEFRAMES.index(st.session_state.timeframe)
+    )
+    
+    if timeframe != st.session_state.timeframe:
+        st.session_state.timeframe = timeframe
+        st.session_state.chart_data = None
+    
+    # Atualizar
+    if st.sidebar.button("🔄 Atualizar", use_container_width=True):
+        st.session_state.chart_data = None
+        st.session_state.balance_data = None
+        st.rerun()
 
+def render_chart():
+    """Renderiza gráfico de preços"""
+    st.markdown(f"## 📈 {st.session_state.symbol} - {st.session_state.timeframe}")
     
-    def render_demo_mode_info(self):
-        """Renderiza informações específicas do modo demo."""
-        current_mode = self.safe_get_session_state('operation_mode', 'demo')
-        
-        if current_mode != 'demo':
-            return
-        
-        st.markdown("""
-        <div class="demo-features">
-        <h3>📊 Modo Demonstração - Recursos Disponíveis</h3>
-        <ul>
-        <li>✅ <strong>Dados em Tempo Real</strong> - WebSocket público da Binance</li>
-        <li>✅ <strong>Gráficos Interativos</strong> - Candlesticks com volume</li>
-        <li>✅ <strong>Indicadores Técnicos</strong> - Próximas sessões</li>
-        <li>✅ <strong>Backtesting</strong> - Próximas sessões</li>
-        <li>✅ <strong>Otimização</strong> - Próximas sessões</li>
-        <li>❌ <strong>Ordens Reais</strong> - Não disponível (sem API)</li>
-        <li>❌ <strong>Saldo da Conta</strong> - Não disponível (sem API)</li>
-        </ul>
-        <p><strong>💡 Dica:</strong> Use este modo para testar estratégias antes de conectar sua API!</p>
-        </div>
-        """, unsafe_allow_html=True)
+    # Carrega dados se necessário
+    if st.session_state.chart_data is None:
+        with st.spinner("📊 Carregando dados..."):
+            st.session_state.chart_data = client.get_historical_data(
+                st.session_state.symbol, 
+                st.session_state.timeframe, 
+                500
+            )
     
-    def render_price_chart(self):
-        """Renderiza gráfico de preços otimizado por modo."""
-        current_symbol = self.safe_get_session_state('selected_symbol', 'BTCUSDT')
-        current_timeframe = self.safe_get_session_state('selected_timeframe', TradingConfig.DEFAULT_TIMEFRAME)
-        current_mode = self.safe_get_session_state('operation_mode', 'demo')
-        
-        st.markdown(f"## 📈 Gráfico - {current_symbol}")
-        
-        # Obtém dados baseado no modo
-        try:
-            if st.session_state.historical_data is None:
-                with st.spinner("📊 Carregando dados..."):
-                    if current_mode == 'demo':
-                        # Modo demo - usa API pública
-                        st.session_state.historical_data = binance_client.get_public_historical_data(
-                            current_symbol, current_timeframe, 500
-                        )
-                    else:
-                        # Modo autenticado - usa API privada com fallback
-                        st.session_state.historical_data = binance_client.get_historical_data(
-                            current_symbol, current_timeframe, 500
-                        )
-    except Exception as e:
-        trading_logger.log_error(f"Erro ao carregar dados: {str(e)}", e)
-        st.error(f"❌ Erro ao carregar dados: {str(e)}")
-        return
-    
-    df = st.session_state.historical_data
+    df = st.session_state.chart_data
     
     if df is not None and not df.empty:
-        try:
-            # Resto do código do gráfico permanece igual...
-            # [código do gráfico aqui - mesmo de antes]
-            
-            # Cria gráfico
-            fig = make_subplots(
-                rows=2, cols=1,
-                shared_xaxes=True,
-                vertical_spacing=0.1,
-                subplot_titles=(f'{current_symbol} - {current_timeframe}', 'Volume'),
-                row_heights=[0.7, 0.3]
-            )
-            
-            # Candlestick
-            fig.add_trace(
-                go.Candlestick(
-                    x=df.index,
-                    open=df['open'],
-                    high=df['high'],
-                    low=df['low'],
-                    close=df['close'],
-                    name="Preço",
-                    increasing_line_color=TradingConfig.CHART_COLORS['bullish'],
-                    decreasing_line_color=TradingConfig.CHART_COLORS['bearish']
-                ),
-                row=1, col=1
-            )
-            
-            # Volume
-            colors = ['#ff4444' if close < open else '#00ff88' 
-                     for close, open in zip(df['close'], df['open'])]
-            
-            fig.add_trace(
-                go.Bar(
-                    x=df.index,
-                    y=df['volume'],
-                    name="Volume",
-                    marker_color=colors,
-                    opacity=0.7
-                ),
-                row=2, col=1
-            )
-            
-            # Layout
-            fig.update_layout(
-                title=f"{current_symbol} - {current_timeframe} ({current_mode.replace('_', ' ').title()})",
-                yaxis_title="Preço (USDT)",
-                yaxis2_title="Volume",
-                template="plotly_dark",
-                height=600,
-                showlegend=False,
-                xaxis_rangeslider_visible=False
-            )
-            
-            fig.update_xaxes(type='date')
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-            # Métricas atuais
-            self.render_price_metrics(df)
-            
-        except Exception as e:
-            trading_logger.log_error(f"Erro ao criar gráfico: {str(e)}", e)
-            st.error(f"❌ Erro ao criar gráfico: {str(e)}")
+        # Cria gráfico
+        fig = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.1,
+            subplot_titles=('Preço', 'Volume'),
+            row_heights=[0.7, 0.3]
+        )
+        
+        # Candlestick
+        fig.add_trace(
+            go.Candlestick(
+                x=df.index,
+                open=df['open'],
+                high=df['high'],
+                low=df['low'],
+                close=df['close'],
+                name="Preço",
+                increasing_line_color=Config.COLORS['green'],
+                decreasing_line_color=Config.COLORS['red']
+            ),
+            row=1, col=1
+        )
+        
+        # Volume
+        colors = [Config.COLORS['red'] if close < open else Config.COLORS['green'] 
+                 for close, open in zip(df['close'], df['open'])]
+        
+        fig.add_trace(
+            go.Bar(
+                x=df.index,
+                y=df['volume'],
+                name="Volume",
+                marker_color=colors,
+                opacity=0.7
+            ),
+            row=2, col=1
+        )
+        
+        # Layout
+        fig.update_layout(
+            title=f"{st.session_state.symbol} - {st.session_state.timeframe}",
+            yaxis_title="Preço (USDT)",
+            yaxis2_title="Volume",
+            template="plotly_dark",
+            height=600,
+            showlegend=False,
+            xaxis_rangeslider_visible=False
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Métricas
+        current_price = df['close'].iloc[-1]
+        prev_price = df['close'].iloc[-2] if len(df) > 1 else current_price
+        change = ((current_price - prev_price) / prev_price) * 100 if prev_price != 0 else 0
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("💰 Preço", f"${current_price:.4f}")
+        
+        with col2:
+            st.metric("📊 Variação", f"{change:+.2f}%")
+        
+        with col3:
+            st.metric("📈 Máxima", f"${df['high'].iloc[-1]:.4f}")
+        
+        with col4:
+            st.metric("📉 Mínima", f"${df['low'].iloc[-1]:.4f}")
+        
+        # Dados em tempo real para demo
+        if st.session_state.mode == 'demo':
+            price_data = client.get_current_price(st.session_state.symbol)
+            if price_data:
+                st.success(f"🔴 Preço em tempo real: ${price_data['price']:.4f} ({price_data['change_percent']:+.2f}%)")
     
     else:
-        st.error("❌ Não foi possível carregar dados do gráfico")
+        st.error("❌ Não foi possível carregar os dados")
         st.info("💡 Tente:")
-        st.info("• Verificar sua conexão com a internet")
-        st.info("• Trocar para o modo Demo")
+        st.info("• Verificar conexão com internet")
         st.info("• Selecionar outro símbolo")
+        st.info("• Aguardar alguns segundos e atualizar")
 
-        
-        df = st.session_state.historical_data
-        
-        if df is not None and not df.empty:
-            try:
-                # Cria gráfico
-                fig = make_subplots(
-                    rows=2, cols=1,
-                    shared_xaxes=True,
-                    vertical_spacing=0.1,
-                    subplot_titles=(f'{current_symbol} - {current_timeframe}', 'Volume'),
-                    row_heights=[0.7, 0.3]
-                )
-                
-                # Candlestick
-                fig.add_trace(
-                    go.Candlestick(
-                        x=df.index,
-                        open=df['open'],
-                        high=df['high'],
-                        low=df['low'],
-                        close=df['close'],
-                        name="Preço",
-                        increasing_line_color=TradingConfig.CHART_COLORS['bullish'],
-                        decreasing_line_color=TradingConfig.CHART_COLORS['bearish']
-                    ),
-                    row=1, col=1
-                )
-                
-                # Volume
-                colors = ['#ff4444' if close < open else '#00ff88' 
-                         for close, open in zip(df['close'], df['open'])]
-                
-                fig.add_trace(
-                    go.Bar(
-                        x=df.index,
-                        y=df['volume'],
-                        name="Volume",
-                        marker_color=colors,
-                        opacity=0.7
-                    ),
-                    row=2, col=1
-                )
-                
-                # Layout
-                fig.update_layout(
-                    title=f"{current_symbol} - {current_timeframe} ({'Demo Mode' if current_mode == 'demo' else 'API Mode'})",
-                    yaxis_title="Preço (USDT)",
-                    yaxis2_title="Volume",
-                    template="plotly_dark",
-                    height=600,
-                    showlegend=False,
-                    xaxis_rangeslider_visible=False
-                )
-                
-                fig.update_xaxes(type='date')
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Métricas atuais
-                self.render_price_metrics(df)
-                
-            except Exception as e:
-                trading_logger.log_error(f"Erro ao criar gráfico: {str(e)}", e)
-                st.error(f"❌ Erro ao criar gráfico: {str(e)}")
-        
-        else:
-            st.error("❌ Erro ao carregar dados do gráfico")
-            if current_mode != 'demo':
-                st.info("💡 Tente o modo Demo para dados públicos sem API")
+def render_balance():
+    """Renderiza informações de saldo"""
+    if st.session_state.mode == 'demo':
+        st.info("📊 **Modo Demo**: Saldo não disponível sem autenticação")
+        return
     
-    def render_price_metrics(self, df: pd.DataFrame):
-        """Renderiza métricas de preço."""
-        if df is None or df.empty:
-            return
-        
-        try:
-            current_price = df['close'].iloc[-1]
-            prev_price = df['close'].iloc[-2] if len(df) > 1 else current_price
-            price_change = ((current_price - prev_price) / prev_price) * 100 if prev_price != 0 else 0
-            
-            current_mode = self.safe_get_session_state('operation_mode', 'demo')
-            current_symbol = self.safe_get_session_state('selected_symbol', 'BTCUSDT')
-            
-            # Dados em tempo real do WebSocket (se disponível)
-            if current_mode == 'demo':
-                try:
-                    cached_price = binance_client.get_cached_price(current_symbol)
-                    if cached_price:
-                        current_price = cached_price['price']
-                        price_change = cached_price.get('change_percent', price_change)
-                except Exception as e:
-                    trading_logger.log_error(f"Erro ao obter preço do cache: {str(e)}", e)
-            
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("💰 Preço Atual", f"${current_price:.4f}")
-            
-            with col2:
-                st.metric("📊 Variação", f"{price_change:+.2f}%")
-            
-            with col3:
-                st.metric("📈 Máxima", f"${df['high'].iloc[-1]:.4f}")
-            
-            with col4:
-                st.metric("📉 Mínima", f"${df['low'].iloc[-1]:.4f}")
-            
-            # Informações do WebSocket em tempo real
-            if current_mode == 'demo':
-                try:
-                    cached_price = binance_client.get_cached_price(current_symbol)
-                    if cached_price:
-                        timestamp = cached_price['timestamp'].strftime("%H:%M:%S")
-                        st.success(f"🔴 Dados em tempo real via WebSocket - Última atualização: {timestamp}")
-                except Exception as e:
-                    st.info("📊 Dados históricos carregados - WebSocket inicializando...")
-                    
-        except Exception as e:
-            trading_logger.log_error(f"Erro ao renderizar métricas: {str(e)}", e)
-            st.error("❌ Erro ao calcular métricas de preço")
+    if not st.session_state.authenticated:
+        st.info("🔐 Conecte sua API para ver o saldo")
+        return
     
-    def render_account_info(self):
-        """Renderiza informações da conta."""
-        current_mode = self.safe_get_session_state('operation_mode', 'demo')
-        
-        if current_mode == 'demo':
-            st.info("📊 **Modo Demo**: Informações da conta não disponíveis sem API")
-            return
-        
-        if not binance_client.is_authenticated:
-            st.info("🔐 Conecte sua API para ver informações da conta")
-            return
-        
-        st.markdown("## 💰 Informações da Conta")
-        
-        try:
-            # Obtém saldo
-            if st.session_state.account_balance is None:
-                with st.spinner("💰 Carregando saldo da conta..."):
-                    st.session_state.account_balance = binance_client.get_account_balance()
-            
-            balance_data = st.session_state.account_balance
-            
-            if balance_data:
-                # Métricas principais
-                col1, col2, col3, col4 = st.columns(4)
-                
-                total_balance = balance_data.get('total_balance', {})
-                free_balance = balance_data.get('free_balance', {})
-                
-                usdt_total = total_balance.get('USDT', 0)
-                usdt_free = free_balance.get('USDT', 0)
-                
-                with col1:
-                    st.metric("💵 USDT Total", f"{usdt_total:.2f}")
-                
-                with col2:
-                    st.metric("💸 USDT Livre", f"{usdt_free:.2f}")
-                
-                with col3:
-                    st.metric("🔒 USDT Usado", f"{usdt_total - usdt_free:.2f}")
-                
-                with col4:
-                    currencies_count = len(balance_data.get('currencies', {}))
-                    st.metric("🪙 Moedas", currencies_count)
-                
-                # Tabela detalhada
-                if balance_data.get('currencies'):
-                    st.markdown("### 📋 Saldos Detalhados")
-                    
-                    balance_list = []
-                    for currency, info in balance_data['currencies'].items():
-                        balance_list.append({
-                            'Moeda': currency,
-                            'Total': f"{info.get('total', 0):.8f}",
-                            'Livre': f"{info.get('free', 0):.8f}",
-                            'Usado': f"{info.get('used', 0):.8f}"
-                        })
-                    
-                    df_balance = pd.DataFrame(balance_list)
-                    st.dataframe(df_balance, use_container_width=True)
-            else:
-                st.error("❌ Erro ao carregar informações da conta")
-                
-        except Exception as e:
-            trading_logger.log_error(f"Erro ao renderizar informações da conta: {str(e)}", e)
-            st.error(f"❌ Erro ao carregar informações da conta: {str(e)}")
+    st.markdown("## 💰 Saldo da Conta")
     
-    def run(self):
-        """Executa o dashboard principal com tratamento de erros robusto."""
-        try:
-            # Garante que session_state está inicializado
-            self.initialize_session_state()
+    # Carrega saldo se necessário
+    if st.session_state.balance_data is None:
+        with st.spinner("💰 Carregando saldo..."):
+            st.session_state.balance_data = client.get_balance()
+    
+    balance = st.session_state.balance_data
+    
+    if balance:
+        # Métricas principais
+        total_balance = balance.get('total', {})
+        free_balance = balance.get('free', {})
+        
+        usdt_total = total_balance.get('USDT', 0)
+        usdt_free = free_balance.get('USDT', 0)
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("💵 USDT Total", f"{usdt_total:.2f}")
+        
+        with col2:
+            st.metric("💸 USDT Livre", f"{usdt_free:.2f}")
+        
+        with col3:
+            st.metric("🔒 USDT Usado", f"{usdt_total - usdt_free:.2f}")
+        
+        with col4:
+            currencies = len([k for k, v in total_balance.items() if v > 0])
+            st.metric("🪙 Moedas", currencies)
+        
+        # Tabela detalhada
+        if total_balance:
+            st.markdown("### 📋 Detalhes")
             
-            # Renderiza componentes principais
-            self.render_header()
-            self.render_mode_selection_sidebar()
-            self.render_authentication_sidebar()
-            self.render_trading_controls_sidebar()
+            balance_list = []
+            for currency, total in total_balance.items():
+                if total > 0:
+                    free = free_balance.get(currency, 0)
+                    used = total - free
+                    
+                    balance_list.append({
+                        'Moeda': currency,
+                        'Total': f"{total:.8f}",
+                        'Livre': f"{free:.8f}",
+                        'Usado': f"{used:.8f}"
+                    })
             
-            current_mode = self.safe_get_session_state('operation_mode', 'demo')
-            
-            # Conteúdo principal baseado no modo
-            if current_mode == 'demo':
-                # Modo demo - sempre disponível
-                tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "ℹ️ Informações", "⚙️ Configurações"])
-                
-                with tab1:
-                    self.render_price_chart()
-                
-                with tab2:
-                    self.render_demo_mode_info()
-                
-                with tab3:
-                    st.markdown("## ⚙️ Configurações")
-                    st.info("🚧 Configurações avançadas - Próximas sessões")
-            
-            elif binance_client.is_authenticated:
-                # Modo autenticado - funcionalidades completas
-                tab1, tab2, tab3 = st.tabs(["📊 Dashboard", "💰 Conta", "⚙️ Configurações"])
-                
-                with tab1:
-                    self.render_price_chart()
-                
-                with tab2:
-                    self.render_account_info()
-                
-                with tab3:
-                    st.markdown("## ⚙️ Configurações")
-                    st.info("🚧 Configurações avançadas - Próximas sessões")
-            
-            else:
-                # Aguardando autenticação
-                st.markdown("""
-                ## 🔐 Autenticação Necessária
-                
-                Para usar este modo, você precisa fornecer suas credenciais da API Binance.
-                
-                ### 🛡️ Segurança Garantida:
-                - ✅ Credenciais **nunca** são salvas no código
-                - ✅ Armazenamento **apenas** em memória temporária
-                - ✅ Timeout automático em 60 minutos
-                - ✅ Limpeza automática ao fechar o navegador
-                
-                ### 🚀 Para começar:
-                1. Insira suas credenciais na barra lateral
-                2. As credenciais são validadas em tempo real
-                3. Conexão segura com a Binance
-                4. Acesso completo às funcionalidades
-                
-                ### 💡 Alternativa:
-                Use o **Modo Demo** para testar sem credenciais!
-                """)
-                
-        except Exception as e:
-            trading_logger.log_error(f"Erro crítico no dashboard: {str(e)}", e)
-            st.error("❌ Erro crítico no sistema. Recarregue a página.")
-            st.exception(e)  # Mostra stack trace completo em desenvolvimento
+            if balance_list:
+                df_balance = pd.DataFrame(balance_list)
+                st.dataframe(df_balance, use_container_width=True)
+    
+    else:
+        st.error("❌ Erro ao carregar saldo")
 
-# Instância global do dashboard
-dashboard = TradingDashboard()
+def render_info():
+    """Renderiza informações do sistema"""
+    st.markdown("## ℹ️ Informações do Sistema")
+    
+    st.markdown("""
+    ### 🚀 Professional Trading Bot
+    
+    **Recursos Disponíveis:**
+    
+    #### 📊 Modo Demo
+    - ✅ Dados públicos em tempo real
+    - ✅ Gráficos interativos
+    - ✅ Todos os símbolos principais
+    - ❌ Sem acesso ao saldo
+    - ❌ Sem execução de ordens
+    
+    #### 🧪 Modo Testnet
+    - ✅ Simulação completa
+    - ✅ Saldo da conta de teste
+    - ✅ Execução de ordens simuladas
+    - ✅ Ambiente seguro para testes
+    
+    #### ⚡ Modo Mainnet
+    - ✅ Trading real
+    - ✅ Saldo real da conta
+    - ✅ Execução de ordens reais
+    - ⚠️ **CUIDADO**: Dinheiro real!
+    
+    ### 🔒 Segurança
+    - Credenciais nunca são salvas
+    - Conexão direta com Binance
+    - Código open source
+    - Limpeza automática da memória
+    
+    ### 🛠️ Próximas Funcionalidades
+    - Indicadores técnicos avançados
+    - Estratégias automatizadas
+    - Backtesting completo
+    - Gestão de risco
+    - Alertas em tempo real
+    """)
+
+# =============================================================================
+# APLICAÇÃO PRINCIPAL
+# =============================================================================
+
+def main():
+    """Função principal"""
+    # Setup
+    setup_page()
+    init_session_state()
+    
+    # Cliente global
+    global client
+    client = BinanceClient()
+    
+    # Interface
+    render_header()
+    render_sidebar()
+    
+    # Conteúdo principal
+    if st.session_state.mode == 'demo' or st.session_state.authenticated:
+        # Funcionalidades disponíveis
+        tab1, tab2, tab3 = st.tabs(["📊 Gráficos", "💰 Saldo", "ℹ️ Info"])
+        
+        with tab1:
+            render_chart()
+        
+        with tab2:
+            render_balance()
+        
+        with tab3:
+            render_info()
+    
+    else:
+        # Aguardando autenticação
+        st.markdown("""
+        ## 🔐 Autenticação Necessária
+        
+        Para usar este modo, conecte sua API Binance na barra lateral.
+        
+        ### 🛡️ Sua segurança é nossa prioridade:
+        - ✅ Credenciais **nunca** são salvas
+        - ✅ Armazenamento apenas em memória
+        - ✅ Limpeza automática
+        - ✅ Conexão direta com Binance
+        
+        ### 💡 Alternativa:
+        Use o **Modo Demo** para testar sem credenciais!
+        """)
+
+if __name__ == "__main__":
+    main()
