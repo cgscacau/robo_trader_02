@@ -15,10 +15,11 @@ from typing import Optional, Dict, Any, List
 import time
 import json
 
-# Importações dos módulos existentes
-from ..config.settings import TradingConfig
-from ..api.binance_client import binance_client
-from ..utils.logger import trading_logger
+# Importações dos módulos do projeto - IMPORTS ABSOLUTOS
+from config.settings import TradingConfig
+from api.binance_client import binance_client
+from utils.logger import trading_logger
+
 
 class TradingDashboard:
     """
