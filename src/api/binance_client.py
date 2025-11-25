@@ -513,5 +513,58 @@ class BinanceClient:
         except Exception as e:
             trading_logger.log_error(f"Erro ao desconectar: {str(e)}", e)
 
+    def get_historical_data(self, symbol: str, timeframe: str, 
+                           limit: int = 500) -> Optional[pd.DataFrame]:
+        """
+        Obtém dados históricos via API autenticada.
+        
+        Args:
+            symbol: Símbolo da moeda
+            timeframe: Timeframe dos dados
+            limit: Número de candles
+            
+        Returns:
+            DataFrame com dados históricos
+        """
+        if not self.is_authenticated or not self._check_credentials_timeout():
+            trading_logger.log_warning("Cliente não autenticado para dados históricos")
+            # Fallback para dados públicos
+            return self.get_public_historical_data(symbol, timeframe, limit)
+        
+        try:
+            start_time = time.time()
+            
+            # Limita o número de candles
+            limit = min(limit, TradingConfig.MAX_HISTORICAL_CANDLES)
+            
+            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            response_time = time.time() - start_time
+            
+            trading_logger.log_api_request(
+                f'fetch_ohlcv/{symbol}/{timeframe}', 'GET', 200, response_time
+            )
+            
+            if ohlcv:
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df.set_index('timestamp', inplace=True)
+                
+                trading_logger.log_info(
+                    f"Dados históricos autenticados obtidos: {symbol} - {len(df)} candles", 'api'
+                )
+                
+                return df
+            
+            return None
+            
+        except Exception as e:
+            trading_logger.log_error(f"Erro ao obter dados históricos autenticados {symbol}: {str(e)}", e)
+            # Fallback para dados públicos em caso de erro
+            trading_logger.log_info("Tentando fallback para dados públicos")
+            return self.get_public_historical_data(symbol, timeframe, limit)
+
+
+
+
 # Instância global do cliente
 binance_client = BinanceClient()
