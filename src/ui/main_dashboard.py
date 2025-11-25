@@ -348,59 +348,82 @@ class TradingDashboard:
                 except Exception as e:
                     trading_logger.log_error(f"Erro ao desconectar: {str(e)}", e)
                     st.sidebar.error("❌ Erro ao desconectar")
-    
+        
     def render_trading_controls_sidebar(self):
-        """Renderiza controles de trading."""
+        """Renderiza controles de trading com validação robusta."""
         st.sidebar.markdown("## 📊 Controles de Trading")
         
         current_mode = self.safe_get_session_state('operation_mode', 'demo')
         current_symbol = self.safe_get_session_state('selected_symbol', 'BTCUSDT')
         current_timeframe = self.safe_get_session_state('selected_timeframe', TradingConfig.DEFAULT_TIMEFRAME)
         
-        # Símbolos disponíveis baseados no modo
-        if current_mode == 'demo':
-            available_symbols = TradingConfig.PUBLIC_SYMBOLS
-        else:
-            available_symbols = TradingConfig.DEFAULT_SYMBOLS
-        
-        # Seleção de símbolo
         try:
-            symbol_index = available_symbols.index(current_symbol) if current_symbol in available_symbols else 0
-        except (ValueError, IndexError):
-            symbol_index = 0
-        
-        symbol = st.sidebar.selectbox(
-            "Símbolo:",
-            available_symbols,
-            index=symbol_index
-        )
-        
-        if symbol != current_symbol:
-            st.session_state.selected_symbol = symbol
-            st.session_state.historical_data = None
-        
-        # Seleção de timeframe
-        try:
-            timeframe_index = TradingConfig.AVAILABLE_TIMEFRAMES.index(current_timeframe)
-        except (ValueError, IndexError):
-            timeframe_index = TradingConfig.AVAILABLE_TIMEFRAMES.index(TradingConfig.DEFAULT_TIMEFRAME)
-        
-        timeframe = st.sidebar.selectbox(
-            "Timeframe:",
-            TradingConfig.AVAILABLE_TIMEFRAMES,
-            index=timeframe_index
-        )
-        
-        if timeframe != current_timeframe:
-            st.session_state.selected_timeframe = timeframe
-            st.session_state.historical_data = None
-        
-        # Botão para atualizar dados
-        if st.sidebar.button("🔄 Atualizar Dados", use_container_width=True):
-            st.session_state.historical_data = None
-            st.session_state.account_balance = None
-            st.session_state.price_data = {}
-            st.rerun()
+            # Símbolos disponíveis baseados no modo - USANDO O MÉTODO CORRETO
+            available_symbols = TradingConfig.get_available_symbols(current_mode)
+            
+            # Valida se o símbolo atual está disponível
+            if current_symbol not in available_symbols:
+                current_symbol = available_symbols[0]  # Usa o primeiro disponível
+                st.session_state.selected_symbol = current_symbol
+            
+            # Seleção de símbolo
+            try:
+                symbol_index = available_symbols.index(current_symbol)
+            except (ValueError, IndexError):
+                symbol_index = 0
+                st.session_state.selected_symbol = available_symbols[0]
+            
+            symbol = st.sidebar.selectbox(
+                "Símbolo:",
+                available_symbols,
+                index=symbol_index,
+                help=f"Símbolos disponíveis no modo {current_mode}"
+            )
+            
+            if symbol != current_symbol:
+                st.session_state.selected_symbol = symbol
+                st.session_state.historical_data = None
+            
+            # Seleção de timeframe
+            try:
+                timeframe_index = TradingConfig.AVAILABLE_TIMEFRAMES.index(current_timeframe)
+            except (ValueError, IndexError):
+                timeframe_index = TradingConfig.AVAILABLE_TIMEFRAMES.index(TradingConfig.DEFAULT_TIMEFRAME)
+                st.session_state.selected_timeframe = TradingConfig.DEFAULT_TIMEFRAME
+            
+            timeframe = st.sidebar.selectbox(
+                "Timeframe:",
+                TradingConfig.AVAILABLE_TIMEFRAMES,
+                index=timeframe_index,
+                help="Intervalo de tempo para os candles"
+            )
+            
+            if timeframe != current_timeframe:
+                st.session_state.selected_timeframe = timeframe
+                st.session_state.historical_data = None
+            
+            # Informações do modo atual
+            st.sidebar.markdown("---")
+            mode_config = TradingConfig.get_operation_mode_config(current_mode)
+            st.sidebar.info(f"📊 **Modo**: {mode_config['name']}")
+            st.sidebar.info(f"🎯 **Símbolos**: {len(available_symbols)} disponíveis")
+            
+            # Botão para atualizar dados
+            if st.sidebar.button("🔄 Atualizar Dados", use_container_width=True):
+                st.session_state.historical_data = None
+                st.session_state.account_balance = None
+                st.session_state.price_data = {}
+                st.success("🔄 Dados atualizados!")
+                st.rerun()
+                
+        except Exception as e:
+            trading_logger.log_error(f"Erro nos controles de trading: {str(e)}", e)
+            st.sidebar.error("❌ Erro nos controles")
+            
+            # Valores de fallback seguros
+            st.session_state.selected_symbol = 'BTCUSDT'
+            st.session_state.selected_timeframe = '1h'
+
     
     def render_demo_mode_info(self):
         """Renderiza informações específicas do modo demo."""
