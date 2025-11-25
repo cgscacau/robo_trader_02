@@ -458,22 +458,98 @@ class TradingDashboard:
         
         # Obtém dados baseado no modo
         try:
-            if current_mode == 'demo':
-                # Modo demo - usa API pública
-                if st.session_state.historical_data is None:
-                    with st.spinner("📊 Carregando dados públicos..."):
+            if st.session_state.historical_data is None:
+                with st.spinner("📊 Carregando dados..."):
+                    if current_mode == 'demo':
+                        # Modo demo - usa API pública
                         st.session_state.historical_data = binance_client.get_public_historical_data(
                             current_symbol, current_timeframe, 500
                         )
-            else:
-                # Modo autenticado - usa API privada
-                if binance_client.is_authenticated and st.session_state.historical_data is None:
-                    with st.spinner("📊 Carregando dados da API..."):
-                        st.session_state.historical_data = binance_client.get_account_balance()  # Placeholder - implementar get_historical_data
+                    else:
+                        # Modo autenticado - usa API privada com fallback
+                        st.session_state.historical_data = binance_client.get_historical_data(
+                            current_symbol, current_timeframe, 500
+                        )
+    except Exception as e:
+        trading_logger.log_error(f"Erro ao carregar dados: {str(e)}", e)
+        st.error(f"❌ Erro ao carregar dados: {str(e)}")
+        return
+    
+    df = st.session_state.historical_data
+    
+    if df is not None and not df.empty:
+        try:
+            # Resto do código do gráfico permanece igual...
+            # [código do gráfico aqui - mesmo de antes]
+            
+            # Cria gráfico
+            fig = make_subplots(
+                rows=2, cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.1,
+                subplot_titles=(f'{current_symbol} - {current_timeframe}', 'Volume'),
+                row_heights=[0.7, 0.3]
+            )
+            
+            # Candlestick
+            fig.add_trace(
+                go.Candlestick(
+                    x=df.index,
+                    open=df['open'],
+                    high=df['high'],
+                    low=df['low'],
+                    close=df['close'],
+                    name="Preço",
+                    increasing_line_color=TradingConfig.CHART_COLORS['bullish'],
+                    decreasing_line_color=TradingConfig.CHART_COLORS['bearish']
+                ),
+                row=1, col=1
+            )
+            
+            # Volume
+            colors = ['#ff4444' if close < open else '#00ff88' 
+                     for close, open in zip(df['close'], df['open'])]
+            
+            fig.add_trace(
+                go.Bar(
+                    x=df.index,
+                    y=df['volume'],
+                    name="Volume",
+                    marker_color=colors,
+                    opacity=0.7
+                ),
+                row=2, col=1
+            )
+            
+            # Layout
+            fig.update_layout(
+                title=f"{current_symbol} - {current_timeframe} ({current_mode.replace('_', ' ').title()})",
+                yaxis_title="Preço (USDT)",
+                yaxis2_title="Volume",
+                template="plotly_dark",
+                height=600,
+                showlegend=False,
+                xaxis_rangeslider_visible=False
+            )
+            
+            fig.update_xaxes(type='date')
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Métricas atuais
+            self.render_price_metrics(df)
+            
         except Exception as e:
-            trading_logger.log_error(f"Erro ao carregar dados: {str(e)}", e)
-            st.error(f"❌ Erro ao carregar dados: {str(e)}")
-            return
+            trading_logger.log_error(f"Erro ao criar gráfico: {str(e)}", e)
+            st.error(f"❌ Erro ao criar gráfico: {str(e)}")
+    
+    else:
+        st.error("❌ Não foi possível carregar dados do gráfico")
+        st.info("💡 Tente:")
+        st.info("• Verificar sua conexão com a internet")
+        st.info("• Trocar para o modo Demo")
+        st.info("• Selecionar outro símbolo")
+
         
         df = st.session_state.historical_data
         
